@@ -2,6 +2,7 @@ mod alias;
 mod cli;
 mod gitlog;
 mod metrics;
+mod push_check;
 mod report;
 mod time_filter;
 mod timestamp;
@@ -17,6 +18,7 @@ use crate::alias::parse_aliases;
 use crate::cli::Cli;
 use crate::gitlog::fetch_commits;
 use crate::metrics::{compute_metrics, AliasRule};
+use crate::push_check::{run_push_check, PushCheckCli};
 use crate::report::print_human_report;
 use crate::time_filter::parse_time_filter;
 use crate::timestamp::convert_unix_timestamp;
@@ -31,17 +33,21 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let cli = parse_cli();
-
-    if let Some(ts) = cli.unix {
-        let conversion = convert_unix_timestamp(ts)?;
-        let fmt = "%Y-%m-%d %H:%M:%S %:z";
-        println!("Unix 时间戳：{}", conversion.timestamp);
-        println!("UTC  时间：{}", conversion.utc.format(fmt));
-        println!("本地时间：{}", conversion.local.format(fmt));
-        return Ok(());
+    match parse_command()? {
+        AppCommand::Unix(ts) => {
+            let conversion = convert_unix_timestamp(ts)?;
+            let fmt = "%Y-%m-%d %H:%M:%S %:z";
+            println!("Unix 时间戳：{}", conversion.timestamp);
+            println!("UTC  时间：{}", conversion.utc.format(fmt));
+            println!("本地时间：{}", conversion.local.format(fmt));
+            Ok(())
+        }
+        AppCommand::PushCheck(cfg) => run_push_check(&cfg),
+        AppCommand::CowHorse(cli) => run_cow_horse(cli),
     }
+}
 
+fn run_cow_horse(cli: Cli) -> Result<()> {
     let repo_path = cli
         .path
         .canonicalize()
@@ -125,9 +131,32 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn parse_cli() -> Cli {
-    let args: Vec<String> = env::args()
-        .map(|arg| if arg == "-unix" { "--unix".to_string() } else { arg })
-        .collect();
-    Cli::parse_from(args)
+enum AppCommand {
+    Unix(i64),
+    PushCheck(PushCheckCli),
+    CowHorse(Cli),
+}
+
+fn parse_command() -> Result<AppCommand> {
+    let mut args: Vec<String> = env::args().collect();
+    if args.len() > 1 && args[1] == "push-check" {
+        let mut sub_args = Vec::with_capacity(args.len() - 1);
+        sub_args.push(args[0].clone());
+        sub_args.extend_from_slice(&args[2..]);
+        let cfg = PushCheckCli::parse_from(sub_args);
+        return Ok(AppCommand::PushCheck(cfg));
+    }
+
+    for arg in args.iter_mut().skip(1) {
+        if arg == "-unix" {
+            *arg = "--unix".to_string();
+        }
+    }
+
+    let cli = Cli::parse_from(args);
+    if let Some(ts) = cli.unix {
+        Ok(AppCommand::Unix(ts))
+    } else {
+        Ok(AppCommand::CowHorse(cli))
+    }
 }
